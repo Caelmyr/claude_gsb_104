@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>标签统计 · 风控引擎</title>
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="assets/js/api.js"></script>
+</head>
+<body>
+<div id="app"></div>
+<script>
+let chart = null;
+let days = 7;
+
+async function refresh() {
+  const r = await API.get(`/api/tags/stats?days=${days}`);
+  const s = r.stats;
+
+  document.getElementById("tiles").innerHTML = `
+    <div class="grid cols-3">
+      <div class="stat"><div class="label">已标注事件</div><div class="value primary">${s.total_annotated}</div><div class="hint">打过标签或写过备注的事件</div></div>
+      <div class="stat"><div class="label">使用中的标签</div><div class="value">${s.total_tags}</div><div class="hint">不同标签个数</div></div>
+      <div class="stat"><div class="label">统计窗口</div><div class="value success">${days} 天</div><div class="hint">按最近更新时间归集</div></div>
+    </div>`;
+
+  // 标签使用次数表
+  const tbody = document.getElementById("tag-table");
+  if (!s.tags.length) {
+    tbody.innerHTML = `<tr><td colspan="3" class="muted" style="text-align:center;padding:18px">
+      还没有任何标签，去「实时事件流」给事件打标签吧</td></tr>`;
+  } else {
+    const max = s.tags[0].count || 1;
+    tbody.innerHTML = s.tags.map(t => `
+      <tr>
+        <td><span class="tag-badge" style="cursor:pointer" onclick="filterEvents('${UI.esc(t.name)}')">🏷 ${UI.esc(t.name)}</span></td>
+        <td class="num"><b>${t.count}</b></td>
+        <td style="width:50%"><div style="background:#dbeafe;border-radius:4px;height:10px;width:${(t.count / max * 100).toFixed(1)}%;min-width:4px"></div></td>
+      </tr>`).join("");
+  }
+
+  // 每日趋势（堆叠折线，按标签）
+  const daily = s.daily || [];
+  const labels = daily.map(d => d.date.slice(4, 6) + "-" + d.date.slice(6, 8));
+  const tagNames = s.tags.map(t => t.name);
+  chart = chart || echarts.init(document.getElementById("chart-trend"));
+  chart.setOption({
+    title: { text: "标签使用趋势（最近更新 / 天）", left: "center", textStyle: { fontSize: 14 } },
+    tooltip: { trigger: "axis" },
+    legend: { type: "scroll", bottom: 0, data: tagNames },
+    grid: { left: 40, right: 20, top: 40, bottom: 50 },
+    xAxis: { type: "category", data: labels, boundaryGap: false },
+    yAxis: { type: "value", minInterval: 1 },
+    series: tagNames.map(name => ({
+      name,
+      type: "line",
+      smooth: true,
+      stack: "tags",
+      areaStyle: { opacity: .08 },
+      data: daily.map(d => d.counts[name] || 0),
+    })),
+  }, true);
+}
+
+function filterEvents(tag) {
+  location.href = "/events.html?tag=" + encodeURIComponent(tag);
+}
+
+window.addEventListener("resize", () => chart && chart.resize());
+
+boot("标签统计", () => {
+  const page = document.getElementById("page");
+  page.innerHTML = `
+    <div id="tiles"></div>
+    <div class="grid cols-2">
+      <div class="card">
+        <div class="card-head"><h3>🏷 标签使用次数</h3>
+          <select id="f-days" class="btn sm" style="padding:4px 8px">
+            <option value="7">近 7 天</option>
+            <option value="14">近 14 天</option>
+            <option value="30">近 30 天</option>
+          </select>
+        </div>
+        <div class="sub">点击标签可跳转到事件流，查看带该标签的全部事件</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>标签</th><th>使用次数</th><th>占比</th></tr></thead>
+            <tbody id="tag-table"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card"><div id="chart-trend" style="height:380px"></div></div>
+    </div>`;
+  document.getElementById("f-days").onchange = (e) => { days = parseInt(e.target.value); refresh(); };
+  refresh();
+});
+</script>
+</body>
+</html>

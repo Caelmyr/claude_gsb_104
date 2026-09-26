@@ -13,10 +13,19 @@
 let ws = null;
 let paused = false;
 let maxLines = 500;
-let lineCount = 0;
 
 const TYPE_ICON = { login: "🔑", register: "📝", order: "🛒", payment: "💳", transfer: "💸", withdraw: "🏧", sms: "✉️", api: "🔌" };
+const ACT_LABEL = { reject: "拒绝", review: "复核", alert: "告警", pass: "放行" };
 
+let tagPreset = ["疑似团伙", "误报", "需人工关注"];
+let tagUsage = {};
+let currentTag = "";          // 当前标签过滤
+const streamTags = new Map(); // event_id -> tags（实时流标注后即时回显）
+const streamNotes = new Set();// 有备注的实时流事件 id
+
+// ---------------------------------------------------------------------------
+// WebSocket 实时流
+// ---------------------------------------------------------------------------
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/api/ws/events`);
@@ -26,9 +35,6 @@ function connect() {
     let data;
     try { data = JSON.parse(msg.data); } catch (e) { return; }
     if (data.kind === "event") appendEvent(data.event, data.decision);
-    else if (data.kind === "hello") {
-      // 连接握手，忽略
-    }
   };
   ws.onclose = () => { setStatus("已断开，3 秒后重连…", "danger"); setTimeout(connect, 3000); };
   ws.onerror = () => setStatus("连接错误", "danger");
@@ -40,27 +46,44 @@ function setStatus(text, cls) {
   el.className = "badge " + cls;
 }
 
+function tagsHtml(eventId, tags, asChips) {
+  if (!tags || !tags.length) return "";
+  return tags.map(t =>
+    asChips
+      ? `<span class="tag-badge">${UI.esc(t)}</span>`
+      : `<span class="ev-tag">🏷 ${UI.esc(t)}</span>`).join("");
+}
+
 function appendEvent(event, decision) {
   if (paused) return;
   const log = document.getElementById("events-log");
   const t = new Date(event.ts * 1000).toLocaleTimeString("zh-CN", { hour12: false });
   const icon = TYPE_ICON[event.type] || "⚙️";
   const actCls = "act-" + (decision.action || "pass");
-  const actLabel = { reject: "拒绝", review: "复核", alert: "告警", pass: "放行" }[decision.action] || decision.action;
+  const actLabel = ACT_LABEL[decision.action] || decision.action;
   const risk = decision.risk_score || 0;
+  const tags = event.tags && event.tags.length ? event.tags : (streamTags.get(event.id) || []);
+  const noted = event.note || streamNotes.has(event.id);
   const line = document.createElement("div");
-  line.className = "ev-line";
+  line.className = "ev-line clickable";
+  line.title = "点击查看详情 / 添加标签备注";
+  line.dataset.id = event.id;
   line.innerHTML = `<span class="t">${t}</span>
     <span class="tag">${icon} ${UI.esc(event.type)}</span>
-    <span style="flex:1;color:#9ca3af">${UI.esc(event.ip || "")} ${UI.esc(event.user_id || "")} ${event.amount != null ? "¥" + event.amount : ""}</span>
+    <span style="flex:1;color:#9ca3af;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${UI.esc(event.ip || "")} ${UI.esc(event.user_id || "")} ${event.amount != null ? "¥" + event.amount : ""}</span>
+    ${tagsHtml(event.id, tags, false)}
+    ${noted ? `<span class="ev-note" title="有备注">📝</span>` : ""}
     ${decision.matched ? `<span class="tag">命中${decision.fired_rules.length}条</span>` : ""}
     <span class="${actCls}">${actLabel} ${risk ? "· " + risk : ""}</span>`;
+  line.onclick = () => openAnnotation(event.id);
   log.appendChild(line);
-  lineCount++;
   while (log.childNodes.length > maxLines) log.removeChild(log.firstChild);
   log.scrollTop = log.scrollHeight;
 }
 
+// ---------------------------------------------------------------------------
+// 注入 / 仿真
+// ---------------------------------------------------------------------------
 async function ingest() {
   let event;
   try { event = JSON.parse(document.getElementById("manual-event").value); }
@@ -76,13 +99,154 @@ async function simulate() {
   btn.disabled = true; btn.textContent = "仿真中…";
   try {
     const r = await API.post("/api/events/simulate", { count, burst });
-    UI.toast(`仿真完成：${r.count} 条，命中 ${r.matched}，拒绝 ${r.rejected}`, "ok");
+    UI.toast(`仿真完成：${r.count} 条，命中 ${r.matched}，复核 ${r.rejected}`, "ok");
+    loadHistory();
   } finally { btn.disabled = false; btn.textContent = "批量仿真"; }
 }
 
+// ---------------------------------------------------------------------------
+// 历史事件查询 + 标签过滤
+// ---------------------------------------------------------------------------
+async function loadHistory() {
+  const params = { limit: 200 };
+  if (currentTag) params.tag = currentTag;
+  const q = new URLSearchParams(params);
+  const r = await API.get("/api/events?" + q.toString());
+  const tbody = document.getElementById("event-history");
+  if (!r.events.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="muted" style="text-align:center;padding:18px">
+      ${currentTag ? "最近 1 小时内没有带「" + UI.esc(currentTag) + "」标签的事件" : "暂无事件，可在下方批量仿真"}</td></tr>`;
+  } else {
+    tbody.innerHTML = r.events.map(e => `
+      <tr>
+        <td class="num mono">${UI.fmtTime(e.ts)}</td>
+        <td>${(TYPE_ICON[e.type] || "⚙️")} ${UI.esc(e.type)}</td>
+        <td class="mono">${UI.esc(e.ip || "-")}<br><span class="muted">${UI.esc(e.user_id || "")}</span></td>
+        <td><div class="tag-row">${tagsHtml(e.id, e.tags, true)}${e.note ? `<span title="${UI.esc(e.note)}">📝</span>` : ""}</div></td>
+        <td class="num">${e.amount != null ? "¥" + e.amount : "-"}</td>
+        <td class="mono muted" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${UI.esc(e.id)}">${UI.esc(e.id)}</td>
+        <td class="text-right"><button class="btn sm primary" onclick="openAnnotation('${UI.esc(e.id)}')">标签/备注</button></td>
+      </tr>`).join("");
+  }
+  document.getElementById("history-count").textContent = r.count;
+}
+
+async function refreshTagSuggestions() {
+  try {
+    const r = await API.get("/api/tags");
+    tagPreset = r.preset || tagPreset;
+    tagUsage = r.usage || {};
+  } catch (e) { /* 保留默认 */ }
+  const box = document.getElementById("tag-suggest");
+  if (!box) return;
+  box.innerHTML = tagPreset.map(t =>
+    `<span class="chip suggest" onclick="addTagChip('${UI.esc(t)}')">${UI.esc(t)}${tagUsage[t] ? ` <b>×${tagUsage[t]}</b>` : ""}</span>`
+  ).join("") || `<span class="muted">暂无常用标签</span>`;
+}
+
+function addTagChip(name) {
+  const input = document.getElementById("tag-input");
+  const cur = input.value.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean);
+  if (!cur.includes(name)) cur.push(name);
+  input.value = cur.join(",");
+}
+
+function applyTagFilter(tag) {
+  currentTag = tag || "";
+  const bar = document.getElementById("active-filter");
+  bar.innerHTML = currentTag
+    ? `仅看标签：<span class="chip">${UI.esc(currentTag)}<span class="x" onclick="applyTagFilter('')">✕</span></span>`
+    : "";
+  loadHistory();
+}
+
+// ---------------------------------------------------------------------------
+// 标注弹窗：事件详情 + 标签 + 备注
+// ---------------------------------------------------------------------------
+let editingEventId = null;
+
+async function openAnnotation(eventId) {
+  editingEventId = eventId;
+  const m = UI.modal("事件标注", `<div id="ann-body">加载中…</div>`,
+    `<button class="btn ghost sm" onclick="document.getElementById('modal-mask').classList.remove('show')">取消</button>
+     <button class="btn primary sm" onclick="saveAnnotation()">保存标签与备注</button>`);
+  await refreshTagSuggestions();
+  try {
+    const r = await API.get("/api/events/" + encodeURIComponent(eventId));
+    const e = r.event;
+    const ann = r.annotation || {};
+    const tags = (ann.tags || e.tags || []);
+    m.body.innerHTML = `
+      <div class="sub">事件 <span class="mono">${UI.esc(eventId)}</span>
+        · ${UI.fmtTime(e.ts)} · ${UI.esc(e.type)} · ${UI.esc(e.ip || "")} ${UI.esc(e.user_id || "")}</div>
+      <pre class="json-view" style="max-height:180px">${UI.esc(UI.jsonPretty(e))}</pre>
+      <label style="font-weight:600;display:block;margin:10px 0 6px">标签（多个用逗号或空格分隔）</label>
+      <input id="tag-input" class="mono" style="width:100%" value="${UI.esc(tags.join(","))}"
+             placeholder="如：疑似团伙, 误报, 需人工关注">
+      <div class="sub" style="margin:8px 0 4px">常用标签（点击添加）</div>
+      <div id="tag-suggest" class="tag-row"></div>
+      <label style="font-weight:600;display:block;margin:10px 0 6px">备注</label>
+      <textarea id="note-input" rows="4" style="width:100%" maxlength="5000"
+        placeholder="记录研判结论、关联线索、处置建议……">${UI.esc(ann.note || e.note || "")}</textarea>
+      <div class="sub" id="ann-meta">${ann.updated_at ? "最近更新：" + UI.fmtTime(ann.updated_at) + (ann.updated_by ? " · " + UI.esc(ann.updated_by) : "") : "尚未标注"}</div>`;
+    refreshTagSuggestions();
+    document.getElementById("tag-input").onkeydown = (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); saveAnnotation(); }
+    };
+  } catch (err) {
+    m.body.innerHTML = `<div class="sub" style="color:var(--danger)">加载事件失败：${UI.esc(err.message)}</div>`;
+  }
+}
+
+async function saveAnnotation() {
+  const raw = document.getElementById("tag-input").value;
+  const tags = raw.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean);
+  const note = document.getElementById("note-input").value;
+  try {
+    await API.put("/api/events/" + encodeURIComponent(editingEventId) + "/annotation",
+      { tags, note, replace_tags: true });
+    UI.toast("标签与备注已保存", "ok");
+    streamTags.set(editingEventId, tags);
+    if (note) streamNotes.add(editingEventId); else streamNotes.delete(editingEventId);
+    document.getElementById("modal-mask").classList.remove("show");
+    loadHistory();
+  } catch (e) {
+    UI.toast("保存失败：" + e.message, "err");
+  }
+}
+
+async function quickTag(eventId, tag) {
+  await API.post(`/api/events/${encodeURIComponent(eventId)}/tags`, { tags: [tag] });
+  UI.toast(`已添加标签「${tag}」`, "ok");
+  loadHistory();
+}
+
+// ---------------------------------------------------------------------------
+// 页面
+// ---------------------------------------------------------------------------
 boot("实时事件流", () => {
   const page = document.getElementById("page");
   page.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <h3>🗂 事件检索与标注</h3>
+        <div class="flex">
+          <div class="field" style="margin:0;width:220px"><input id="f-tag" placeholder="按标签过滤，如：误报"></div>
+          <button class="btn sm primary" onclick="applyTagFilter(document.getElementById('f-tag').value.trim())">按标签查询</button>
+          <button class="btn sm" onclick="loadHistory()">刷新</button>
+        </div>
+      </div>
+      <div class="sub">点击事件行的「标签/备注」可打开详情并为单条事件添加多个标签与自由文本备注；标签持久保存，可用于事后归类与二次分析</div>
+      <div id="active-filter" class="mb"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>时间</th><th>类型</th><th>来源</th><th>标签 / 备注</th><th>金额</th><th>事件 ID</th><th></th></tr></thead>
+          <tbody id="event-history"></tbody>
+        </table>
+      </div>
+      <div class="sub mt">共 <b id="history-count">0</b> 条（默认最近 1 小时）</div>
+    </div>
+
     <div class="card">
       <div class="card-head">
         <h3>⚡ 实时事件流</h3>
@@ -92,7 +256,7 @@ boot("实时事件流", () => {
           <button class="btn sm" onclick="document.getElementById('events-log').innerHTML=''">清空</button>
         </div>
       </div>
-      <div class="sub">事件经 WebSocket 实时推送，展示类型、来源与风控决策（拒绝 / 复核 / 告警 / 放行）</div>
+      <div class="sub">事件经 WebSocket 实时推送；点击任意事件行可直接打标签、写备注，已标注事件显示 🏷 / 📝 标记</div>
       <div class="events-log" id="events-log"></div>
     </div>
 
@@ -116,6 +280,14 @@ boot("实时事件流", () => {
       </div>
     </div>`;
   connect();
+  // 支持从标签统计页跳转：?tag=误报
+  const initTag = new URLSearchParams(location.search).get("tag");
+  if (initTag) {
+    document.getElementById("f-tag").value = initTag;
+    applyTagFilter(initTag);
+  } else {
+    loadHistory();
+  }
 });
 </script>
 </body>

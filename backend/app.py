@@ -9,6 +9,7 @@ from flask_sock import Sock
 from backend import config, auth, runtime
 from backend.engine.engine import RiskEngine
 from backend.flows import FlowStore
+from backend.annotation_store import AnnotationStore
 from backend.settings_store import get_settings
 
 # 全局 socket 实例（供 app.py 与测试使用）
@@ -27,7 +28,8 @@ def create_app():
     # 运行时单例
     engine = RiskEngine(settings=get_settings())
     flows = FlowStore()
-    runtime.init(engine, flows)
+    annotations = AnnotationStore()
+    runtime.init(engine, flows, annotations)
 
     # 初始化样例数据（幂等）
     from backend import seed
@@ -35,8 +37,10 @@ def create_app():
 
     # ---- 注册 API 蓝图 ----
     from backend.api import (rules, events, alerts, stats, users,
-                             settings, sandbox, dict as dict_api, flows as flows_api)
-    for module in (rules, events, alerts, stats, users, settings, sandbox, dict_api, flows_api):
+                             settings, sandbox, dict as dict_api,
+                             flows as flows_api, annotations)
+    for module in (rules, events, alerts, stats, users, settings, sandbox,
+                   dict_api, flows_api, annotations):
         app.register_blueprint(module.bp)
 
     # ---- 认证 ----
@@ -53,7 +57,6 @@ def create_app():
         session["username"] = username
         auth.record_login(username)
         pub = auth.public_user_dict(user)
-        pub["role"] = "viewer"
         return jsonify({"ok": True, "user": pub})
 
     @app.route("/api/logout", methods=["POST"])
@@ -76,7 +79,6 @@ def create_app():
                 ws.send(json.dumps(message, ensure_ascii=False))
             except Exception:
                 pass
-        engine.add_listener(send)
         engine.add_listener(send)
         # 连接后先推送一条快照（当前统计）
         try:

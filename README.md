@@ -6,13 +6,14 @@
 
 ## 🚀 功能特性
 
-### 前端（10 个页面，原生 HTML/CSS/JS）
+### 前端（12 个页面，原生 HTML/CSS/JS）
 | 页面 | 路径 | 说明 |
 |------|------|------|
 | 登录 / 总览 | `index.html` | 登录认证、系统概览看板、关键指标 |
 | 规则配置 | `rules.html` | 规则 CRUD、CodeMirror JSON 编辑器、语法校验、启停 |
 | 决策流设计 | `flows.html` | 可视化拖拽节点（条件 / 动作 / 分支）编排决策流 |
-| 实时事件流 | `events.html` | WebSocket 滚动展示实时事件与命中告警 |
+| 实时事件流 | `events.html` | WebSocket 滚动展示实时事件与命中告警、历史事件检索、事件标签/备注、按标签过滤 |
+| 标签统计 | `tags.html` | 各标签使用次数排行与每日趋势，点击标签跳转到对应事件流 |
 | 告警列表 | `alerts.html` | 告警查询、去重计数、标记处理、导出（CSV/JSON） |
 | 统计报表 | `stats.html` | ECharts 图表：命中率、拒绝率、事件趋势、规则命中排行 |
 | 用户管理 | `users.html` | 用户 CRUD、角色（admin/analyst/viewer）、重置密码 |
@@ -43,6 +44,7 @@ gsb3/
 │   ├── event_store.py         # 事件存储：内存缓冲 + 后台刷盘线程
 │   ├── flows.py               # 决策流编译与执行（条件/动作/分支）
 │   ├── settings_store.py      # 系统设置读写（深合并）
+│   ├── annotation_store.py    # 事件标签/备注持久化（按事件 id 索引 + 变更历史）
 │   ├── seed.py                # 样例数据初始化（10 条规则、字典、示例决策流，幂等）
 │   ├── runtime.py             # 运行时单例引用
 │   ├── engine/
@@ -57,13 +59,14 @@ gsb3/
 │       ├── rules.py           # 规则 CRUD、校验、版本、回滚
 │       ├── events.py          # 事件查询、摄取、模拟突发、存储统计
 │       ├── alerts.py          # 告警查询、标记、导出、统计
+│       ├── annotations.py     # 事件标签/备注增改、标签预设、标签统计
 │       ├── stats.py           # 统计报表（命中率/拒绝率/趋势）
 │       ├── flows.py           # 决策流 CRUD 与执行
 │       ├── sandbox.py         # dry-run、单规则/决策流测试、窗口预热
 │       ├── users.py           # 用户管理
 │       ├── settings.py        # 系统设置
 │       └── dict.py            # 数据字典
-├── frontend/                  # 11 个页面 + assets/css/style.css + assets/js/api.js
+├── frontend/                  # 12 个页面 + assets/css/style.css + assets/js/api.js
 ├── data/                      # JSON 数据（运行时自动创建）：rules/versions/events/alerts/...
 ├── requirements.txt
 ├── run.py                     # 一键启动脚本
@@ -116,7 +119,8 @@ python run.py
 
 - 认证：`POST /api/login`、`POST /api/logout`、`GET /api/me`
 - 规则：`GET/POST /api/rules`、`GET/PUT/DELETE /api/rules/<id>`、`POST /api/rules/validate`、`POST /api/rules/<id>/enable`、`GET /api/rules/<id>/versions`、`POST /api/rules/<id>/rollback`
-- 事件：`GET /api/events`、`POST /api/events/ingest`、`POST /api/events/simulate`、`GET /api/events/store_stats`
+- 事件：`GET /api/events`（支持 `tag` 按标签过滤）、`GET /api/events/<id>`、`POST /api/events/ingest`、`POST /api/events/simulate`、`GET /api/events/store_stats`
+- 事件标注：`PUT /api/events/<id>/annotation`、`GET /api/events/<id>/annotation`、`POST /api/events/<id>/tags`、`DELETE /api/events/<id>/tags/<tag>`、`GET /api/tags`、`GET /api/tags/stats`
 - 告警：`GET /api/alerts`、`POST /api/alerts/mark`、`GET /api/alerts/export`、`GET /api/alerts/stats`
 - 统计：`GET /api/stats`、`POST /api/stats/reset`
 - 决策流：`GET/POST /api/flows`、`GET/PUT/DELETE /api/flows/<id>`
