@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>标签统计 · 风控引擎</title>
+<link rel="stylesheet" href="assets/css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="assets/js/api.js"></script>
+</head>
+<body>
+<div id="app"></div>
+<script>
+let trendChart = null;
+const PALETTE = ["#2563eb", "#dc2626", "#d97706", "#16a34a", "#0891b2", "#7c3aed", "#db2777", "#65a30d"];
+
+async function refresh() {
+  const days = document.getElementById("f-days").value;
+  const r = await API.get("/api/tags/stats?days=" + days);
+  const s = r.stats;
+
+  // 顶部磁贴
+  document.getElementById("tiles").innerHTML = `
+    <div class="grid cols-3">
+      <div class="stat"><div class="label">已使用标签</div><div class="value primary">${s.total_tags}</div><div class="hint">去重后的标签种类数</div></div>
+      <div class="stat"><div class="label">已标注事件</div><div class="value">${s.total_annotated_events}</div><div class="hint">携带标签或备注的事件数</div></div>
+      <div class="stat"><div class="label">备注总数</div><div class="value warning">${s.total_notes}</div><div class="hint">分析师沉淀的处置记录</div></div>
+    </div>`;
+
+  // 趋势图：取使用次数 Top 8 的标签
+  const top = s.tags.slice(0, 8);
+  if (!trendChart) trendChart = echarts.init(document.getElementById("chart-trend"));
+  trendChart.setOption({
+    title: { text: `各标签每日打标趋势（近 ${s.days.length} 天）`, left: "center", textStyle: { fontSize: 14 } },
+    tooltip: { trigger: "axis" },
+    legend: { bottom: 0, data: top.map(t => t.tag) },
+    grid: { left: 40, right: 30, top: 40, bottom: 50 },
+    xAxis: { type: "category", data: s.days.map(d => d.slice(5)) },
+    yAxis: { type: "value", minInterval: 1, name: "打标次数" },
+    series: top.map((t, i) => ({
+      name: t.tag, type: "line", smooth: true,
+      data: t.daily.map(d => d.count),
+      itemStyle: { color: PALETTE[i % PALETTE.length] },
+      lineStyle: { color: PALETTE[i % PALETTE.length] },
+      areaStyle: i === 0 ? { opacity: .08 } : undefined,
+    })),
+  }, true);
+
+  // 明细表
+  const tbody = document.getElementById("tag-list");
+  tbody.innerHTML = s.tags.length ? s.tags.map(t => `
+    <tr>
+      <td><span class="tag-chip">${UI.esc(t.tag)}</span></td>
+      <td class="num"><b>${t.count}</b></td>
+      <td class="num">${t.notes}</td>
+      <td class="mono">${t.last_used ? UI.fmtTime(t.last_used) : "-"}</td>
+      <td class="text-right">
+        <a class="btn sm" href="/events.html?tag=${encodeURIComponent(t.tag)}">查看事件</a>
+      </td>
+    </tr>`).join("")
+    : `<tr><td colspan="5" class="empty">暂无标签，去「实时事件流 → 事件查询与标注」为事件打标签</td></tr>`;
+}
+
+window.addEventListener("resize", () => trendChart && trendChart.resize());
+
+boot("标签统计", () => {
+  document.getElementById("page").innerHTML = `
+    <div id="tiles"></div>
+    <div class="card">
+      <div class="card-head"><h3>🏷️ 标签使用趋势</h3>
+        <div class="field" style="margin:0;width:130px"><select id="f-days" onchange="refresh()">
+          <option value="7">近 7 天</option>
+          <option value="14" selected>近 14 天</option>
+          <option value="30">近 30 天</option>
+        </select></div>
+      </div>
+      <div class="sub">统计分析师每日打标次数，帮助团队观察风险类别变化、沉淀处置经验</div>
+      <div id="chart-trend" style="height:340px"></div>
+    </div>
+    <div class="card">
+      <h3>标签明细</h3>
+      <div class="sub">按当前使用次数排序；点击「查看事件」跳转到事件流并按该标签过滤</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>标签</th><th>使用次数</th><th>关联备注</th><th>最近使用</th><th></th></tr></thead>
+          <tbody id="tag-list"></tbody>
+        </table>
+      </div>
+    </div>`;
+  refresh();
+});
+</script>
+</body>
+</html>

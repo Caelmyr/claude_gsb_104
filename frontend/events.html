@@ -14,6 +14,9 @@ let ws = null;
 let paused = false;
 let maxLines = 500;
 let lineCount = 0;
+let lastEvents = [];          // 最近一次查询结果（含标签/备注）
+let knownTags = [];           // 全部已使用标签（筛选下拉 + 输入联想）
+const tagCache = {};          // event_id -> tags，用于实时流补展示
 
 const TYPE_ICON = { login: "🔑", register: "📝", order: "🛒", payment: "💳", transfer: "💸", withdraw: "🏧", sms: "✉️", api: "🔌" };
 
@@ -40,6 +43,10 @@ function setStatus(text, cls) {
   el.className = "badge " + cls;
 }
 
+function tagChips(tags) {
+  return (tags || []).map(t => `<span class="tag-chip">${UI.esc(t)}</span>`).join("");
+}
+
 function appendEvent(event, decision) {
   if (paused) return;
   const log = document.getElementById("events-log");
@@ -48,11 +55,13 @@ function appendEvent(event, decision) {
   const actCls = "act-" + (decision.action || "pass");
   const actLabel = { reject: "拒绝", review: "复核", alert: "告警", pass: "放行" }[decision.action] || decision.action;
   const risk = decision.risk_score || 0;
+  const tags = tagCache[event.id];
   const line = document.createElement("div");
   line.className = "ev-line";
   line.innerHTML = `<span class="t">${t}</span>
     <span class="tag">${icon} ${UI.esc(event.type)}</span>
     <span style="flex:1;color:#9ca3af">${UI.esc(event.ip || "")} ${UI.esc(event.user_id || "")} ${event.amount != null ? "¥" + event.amount : ""}</span>
+    ${tags && tags.length ? `<span>${tagChips(tags)}</span>` : ""}
     ${decision.matched ? `<span class="tag">命中${decision.fired_rules.length}条</span>` : ""}
     <span class="${actCls}">${actLabel} ${risk ? "· " + risk : ""}</span>`;
   log.appendChild(line);
@@ -80,7 +89,157 @@ async function simulate() {
   } finally { btn.disabled = false; btn.textContent = "批量仿真"; }
 }
 
-boot("实时事件流", () => {
+/* ================= 事件查询（支持按标签过滤） ================= */
+
+async function refreshKnownTags(keepValue) {
+  const r = await API.get("/api/tags");
+  knownTags = (r.tags || []).map(t => t.tag);
+  const sel = document.getElementById("q-tag");
+  const cur = keepValue !== undefined ? keepValue : sel.value;
+  sel.innerHTML = `<option value="">全部标签</option>` +
+    knownTags.map(t => `<option value="${UI.esc(t)}">${UI.esc(t)}</option>`).join("");
+  sel.value = cur;
+  // 标注弹窗里的输入联想
+  const dl = document.getElementById("tag-suggestions");
+  if (dl) dl.innerHTML = knownTags.map(t => `<option value="${UI.esc(t)}">`).join("");
+}
+
+async function queryEvents() {
+  const hours = parseFloat(document.getElementById("q-range").value);
+  const tag = document.getElementById("q-tag").value;
+  const end = Date.now() / 1000;
+  const start = end - hours * 3600;
+  let url = `/api/events?start=${start.toFixed(0)}&end=${end.toFixed(0)}&limit=200`;
+  if (tag) url += "&tag=" + encodeURIComponent(tag);
+  const r = await API.get(url);
+  lastEvents = (r.events || []).slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  lastEvents.forEach(e => { if (e.tags && e.tags.length) tagCache[e.id] = e.tags; });
+  renderResults();
+}
+
+function renderResults() {
+  const tbody = document.getElementById("event-list");
+  if (!lastEvents.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty">该条件下暂无事件</td></tr>`;
+  } else {
+    tbody.innerHTML = lastEvents.map((e, i) => `
+      <tr>
+        <td class="mono">${UI.fmtTime(e.ts)}</td>
+        <td>${TYPE_ICON[e.type] || "⚙️"} ${UI.esc(e.type || "-")}</td>
+        <td class="mono">${UI.esc(e.ip || "-")}</td>
+        <td class="mono">${UI.esc(e.user_id || "-")}</td>
+        <td class="num">${e.amount != null ? "¥" + e.amount : "-"}</td>
+        <td>${tagChips(e.tags)}</td>
+        <td class="num">${(e.notes || []).length ? `📝 ${e.notes.length}` : "-"}</td>
+        <td class="text-right"><button class="btn sm primary" onclick="openAnnotate(${i})">标注 / 详情</button></td>
+      </tr>`).join("");
+  }
+  document.getElementById("q-total").textContent = lastEvents.length;
+}
+
+/* ================= 标注弹窗：标签 + 备注 ================= */
+
+let currentEvent = null;
+
+function openAnnotate(idx) {
+  currentEvent = lastEvents[idx];
+  const e = currentEvent;
+  const m = UI.modal("事件标注与详情", `
+    <div class="ann-sec">
+      <div class="ann-title">🏷️ 标签</div>
+      <div id="ann-tags"></div>
+      <div class="flex mt">
+        <input id="ann-tag-input" list="tag-suggestions" placeholder="输入新标签或选择已有标签（如 疑似团伙 / 误报 / 需人工关注）" style="flex:1">
+        <datalist id="tag-suggestions">${knownTags.map(t => `<option value="${UI.esc(t)}">`).join("")}</datalist>
+        <button class="btn sm primary" onclick="addTag()">添加标签</button>
+      </div>
+    </div>
+    <div class="ann-sec">
+      <div class="ann-title">📝 备注</div>
+      <div id="ann-notes"></div>
+      <textarea id="ann-note-input" rows="2" placeholder="补充分析结论、处置建议等自由文本…"></textarea>
+      <div class="text-right mt"><button class="btn sm primary" onclick="addNote()">提交备注</button></div>
+    </div>
+    <div class="ann-sec">
+      <div class="ann-title">📄 事件原文</div>
+      <pre class="json-view">${UI.esc(UI.jsonPretty(e))}</pre>
+    </div>`);
+  renderAnnTags();
+  renderAnnNotes();
+  document.getElementById("ann-tag-input").onkeydown = (ev) => { if (ev.key === "Enter") addTag(); };
+}
+
+function renderAnnTags() {
+  const tags = currentEvent.tags || [];
+  document.getElementById("ann-tags").innerHTML = tags.length
+    ? tags.map(t => `<span class="tag-chip">${UI.esc(t)}<span class="x" title="移除" onclick="removeTag('${UI.esc(t)}')">✕</span></span>`).join("")
+    : `<span class="muted">暂无标签，可在下方添加（如 疑似团伙 / 误报 / 需人工关注）</span>`;
+}
+
+function renderAnnNotes() {
+  const notes = currentEvent.notes || [];
+  document.getElementById("ann-notes").innerHTML = notes.length
+    ? notes.map(n => `
+      <div class="note-item">
+        <div class="note-meta">${UI.esc(n.author || "-")} · ${UI.fmtTime(n.ts)}
+          <a href="javascript:void(0)" onclick="removeNote('${UI.esc(n.id)}')">删除</a></div>
+        <div class="note-text">${UI.esc(n.text)}</div>
+      </div>`).join("")
+    : `<div class="muted" style="margin-bottom:8px">暂无备注</div>`;
+}
+
+async function saveTags(tags) {
+  const r = await API.put(`/api/events/${encodeURIComponent(currentEvent.id)}/tags`,
+    { tags, ts: currentEvent.ts });
+  currentEvent.tags = r.tags;
+  if (r.tags.length) tagCache[currentEvent.id] = r.tags; else delete tagCache[currentEvent.id];
+  renderAnnTags();
+  renderResults();
+  refreshKnownTags(document.getElementById("q-tag").value);
+}
+
+function addTag() {
+  const input = document.getElementById("ann-tag-input");
+  const tag = input.value.trim();
+  if (!tag) { UI.toast("请输入标签名", "warn"); return; }
+  const tags = (currentEvent.tags || []).slice();
+  if (tags.includes(tag)) { UI.toast("标签已存在", "warn"); return; }
+  tags.push(tag);
+  input.value = "";
+  saveTags(tags).then(() => UI.toast("标签已保存", "ok"))
+    .catch(e => UI.toast(e.message, "err"));
+}
+
+function removeTag(tag) {
+  const tags = (currentEvent.tags || []).filter(t => t !== tag);
+  saveTags(tags).catch(e => UI.toast(e.message, "err"));
+}
+
+async function addNote() {
+  const input = document.getElementById("ann-note-input");
+  const text = input.value.trim();
+  if (!text) { UI.toast("请输入备注内容", "warn"); return; }
+  try {
+    const r = await API.post(`/api/events/${encodeURIComponent(currentEvent.id)}/notes`,
+      { text, ts: currentEvent.ts });
+    (currentEvent.notes = currentEvent.notes || []).push(r.note);
+    input.value = "";
+    renderAnnNotes();
+    renderResults();
+    UI.toast("备注已保存", "ok");
+  } catch (e) { UI.toast(e.message, "err"); }
+}
+
+async function removeNote(noteId) {
+  try {
+    await API.del(`/api/events/${encodeURIComponent(currentEvent.id)}/notes/${encodeURIComponent(noteId)}`);
+    currentEvent.notes = (currentEvent.notes || []).filter(n => n.id !== noteId);
+    renderAnnNotes();
+    renderResults();
+  } catch (e) { UI.toast(e.message, "err"); }
+}
+
+boot("实时事件流", async () => {
   const page = document.getElementById("page");
   page.innerHTML = `
     <div class="card">
@@ -94,6 +253,28 @@ boot("实时事件流", () => {
       </div>
       <div class="sub">事件经 WebSocket 实时推送，展示类型、来源与风控决策（拒绝 / 复核 / 告警 / 放行）</div>
       <div class="events-log" id="events-log"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>🔍 事件查询与标注</h3>
+        <a class="btn sm" href="/tags.html">🏷️ 标签统计视图</a>
+      </div>
+      <div class="sub">按时间范围与标签检索事件，点击「标注 / 详情」为事件打标签（疑似团伙 / 误报 / 需人工关注…）或写备注</div>
+      <div class="flex mb" style="flex-wrap:wrap">
+        <div class="field" style="margin:0;width:130px"><select id="q-range">
+          <option value="1">最近 1 小时</option><option value="6">最近 6 小时</option>
+          <option value="24" selected>最近 24 小时</option><option value="72">最近 3 天</option>
+        </select></div>
+        <div class="field" style="margin:0;width:180px"><select id="q-tag"><option value="">全部标签</option></select></div>
+        <button class="btn sm primary" onclick="queryEvents()">查询</button>
+        <span class="muted" style="margin-left:auto">共 <b id="q-total">0</b> 条</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>时间</th><th>类型</th><th>IP</th><th>用户</th><th>金额</th><th>标签</th><th>备注</th><th></th></tr></thead>
+          <tbody id="event-list"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="grid cols-2">
@@ -116,6 +297,11 @@ boot("实时事件流", () => {
       </div>
     </div>`;
   connect();
+  // 支持从标签统计页跳转（events.html?tag=xxx）
+  const presetTag = new URLSearchParams(location.search).get("tag") || "";
+  await refreshKnownTags(presetTag);
+  if (presetTag) document.getElementById("q-tag").value = presetTag;
+  queryEvents();
 });
 </script>
 </body>

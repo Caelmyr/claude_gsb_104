@@ -12,8 +12,9 @@
 | 登录 / 总览 | `index.html` | 登录认证、系统概览看板、关键指标 |
 | 规则配置 | `rules.html` | 规则 CRUD、CodeMirror JSON 编辑器、语法校验、启停 |
 | 决策流设计 | `flows.html` | 可视化拖拽节点（条件 / 动作 / 分支）编排决策流 |
-| 实时事件流 | `events.html` | WebSocket 滚动展示实时事件与命中告警 |
+| 实时事件流 | `events.html` | WebSocket 滚动展示实时事件与命中告警；事件查询与标注（打标签、写备注） |
 | 告警列表 | `alerts.html` | 告警查询、去重计数、标记处理、导出（CSV/JSON） |
+| 标签统计 | `tags.html` | 各标签使用次数、关联备注数与每日打标趋势，点击标签可回查事件 |
 | 统计报表 | `stats.html` | ECharts 图表：命中率、拒绝率、事件趋势、规则命中排行 |
 | 用户管理 | `users.html` | 用户 CRUD、角色（admin/analyst/viewer）、重置密码 |
 | 系统设置 | `settings.html` | 匹配模式切换、去重窗口、滑动窗口容量参数 |
@@ -116,7 +117,9 @@ python run.py
 
 - 认证：`POST /api/login`、`POST /api/logout`、`GET /api/me`
 - 规则：`GET/POST /api/rules`、`GET/PUT/DELETE /api/rules/<id>`、`POST /api/rules/validate`、`POST /api/rules/<id>/enable`、`GET /api/rules/<id>/versions`、`POST /api/rules/<id>/rollback`
-- 事件：`GET /api/events`、`POST /api/events/ingest`、`POST /api/events/simulate`、`GET /api/events/store_stats`
+- 事件：`GET /api/events`（支持 `tag` 参数按标签过滤）、`GET /api/events/<id>`（事件详情含标签与备注）、`POST /api/events/ingest`、`POST /api/events/simulate`、`GET /api/events/store_stats`
+- 事件标注：`PUT /api/events/<id>/tags`（整体设置标签）、`POST /api/events/<id>/notes`（追加备注）、`DELETE /api/events/<id>/notes/<note_id>`
+- 标签：`GET /api/tags`（全部标签及使用次数）、`GET /api/tags/stats`（各标签使用次数与每日趋势）
 - 告警：`GET /api/alerts`、`POST /api/alerts/mark`、`GET /api/alerts/export`、`GET /api/alerts/stats`
 - 统计：`GET /api/stats`、`POST /api/stats/reset`
 - 决策流：`GET/POST /api/flows`、`GET/PUT/DELETE /api/flows/<id>`

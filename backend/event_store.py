@@ -140,6 +140,43 @@ class EventStore:
     def recent(self, limit=100):
         return self.query(limit=limit)
 
+    def find_by_id(self, event_id, ts_hint=None, max_scan_hours=72):
+        """按事件 ID 查找单条事件（含内存缓冲）。
+
+        有 ``ts_hint``（如标注记录中的 event_ts）时直接定位对应小时分片；
+        否则从最新分片向前扫描最近 ``max_scan_hours`` 小时。
+        """
+        with self._lock:
+            if ts_hint:
+                key = _hour_key(ts_hint)
+                hit = self._find_in_hour(key, event_id)
+                if hit is not None:
+                    return hit
+            now = time.time()
+            t = int(now) // 3600 * 3600
+            for _ in range(max_scan_hours):
+                hit = self._find_in_hour(_hour_key(t), event_id)
+                if hit is not None:
+                    return hit
+                t -= 3600
+        return None
+
+    def _find_in_hour(self, hour_key, event_id):
+        """在单个小时分片（磁盘 + 内存缓冲）中按 ID 查找，须持锁调用。"""
+        for e in self._buffer.get(hour_key, []):
+            if e.get("id") == event_id:
+                return e
+        path = _hour_path(hour_key)
+        # 分片不存在时直接返回：read_json 的 flock 会为缺失文件创建 .lock 与目录，
+        # 扫描历史分片时会因此产生大量空锁文件
+        if not os.path.exists(path):
+            return None
+        data = read_json(path, {"events": []})
+        for e in data.get("events", []):
+            if e.get("id") == event_id:
+                return e
+        return None
+
     def stats(self):
         with self._lock:
             buffered = 0

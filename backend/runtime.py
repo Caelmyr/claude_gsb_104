@@ -5,9 +5,11 @@ app.py 在启动时调用 init() 注入；各 API 蓝图通过 runtime.engine / 
 """
 engine = None
 flow_store = None
+annotations = None
 
 
-def init(eng, flows):
-    global engine, flow_store
+def init(eng, flows, annotation_store=None):
+    global engine, flow_store, annotations
     engine = eng
     flow_store = flows
+    annotations = annotation_store

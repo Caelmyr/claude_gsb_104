@@ -308,3 +308,21 @@ svg.flow-edges path { fill: none; stroke: #94a3b8; stroke-width: 2; marker-end: 
 .diff-del { background: #fee2e2; }
 .diff-same { color: #6b7280; }
 pre.json-view { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow: auto; font-size: 12.5px; }
+
+/* ---------- 事件标签与备注 ---------- */
+.tag-chip {
+  display: inline-block; background: #ede9fe; color: #6d28d9;
+  border-radius: 12px; padding: 1px 9px; font-size: 11.5px; font-weight: 600;
+  margin: 1px 3px 1px 0; white-space: nowrap;
+}
+.tag-chip .x { cursor: pointer; margin-left: 5px; opacity: .55; }
+.tag-chip .x:hover { opacity: 1; }
+.ann-sec { margin-bottom: 18px; }
+.ann-sec .ann-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+.note-item {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; margin-bottom: 8px; background: #fbfcfe;
+}
+.note-item .note-meta { font-size: 11.5px; color: var(--text-dim); display: flex; gap: 10px; align-items: center; }
+.note-item .note-meta a { margin-left: auto; font-size: 11.5px; }
+.note-item .note-text { margin-top: 3px; white-space: pre-wrap; word-break: break-word; }

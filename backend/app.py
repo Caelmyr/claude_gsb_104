@@ -27,7 +27,8 @@ def create_app():
     # 运行时单例
     engine = RiskEngine(settings=get_settings())
     flows = FlowStore()
-    runtime.init(engine, flows)
+    from backend.event_annotations import AnnotationStore
+    runtime.init(engine, flows, AnnotationStore())
 
     # 初始化样例数据（幂等）
     from backend import seed
@@ -35,8 +36,10 @@ def create_app():
 
     # ---- 注册 API 蓝图 ----
     from backend.api import (rules, events, alerts, stats, users,
-                             settings, sandbox, dict as dict_api, flows as flows_api)
-    for module in (rules, events, alerts, stats, users, settings, sandbox, dict_api, flows_api):
+                             settings, sandbox, dict as dict_api, flows as flows_api,
+                             tags as tags_api)
+    for module in (rules, events, alerts, stats, users, settings, sandbox, dict_api,
+                   flows_api, tags_api):
         app.register_blueprint(module.bp)
 
     # ---- 认证 ----
